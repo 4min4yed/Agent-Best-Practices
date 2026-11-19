@@ -16,6 +16,7 @@ The adopted **methodology** of producing this architecture is based on a **risk 
 * then the authentication, authorization and availability risks related to those aspects (what could go wrong ?)
 * and following the SWIFT (Structured What-If Technique) to uncover more potential risks,
 * and finally addressing the identified risks with appropriate security controls in the architecture, which follows a zero-trust approach. \
+
 Note; the risks related to Microsoft’s part of the shared responsibility model were omitted.
 
 ## Decision Drivers
@@ -119,3 +120,61 @@ Greater key-control; supports HSM-backed keys.
 
 **Deferred** because CMK adds key-availability, rotation, and recovery dependencies and is only configurable at creation on Premium SKU. \
 Reconsider if an external driver is added (regulation, customer or organizational  policy..).
+
+## Decision
+
+Adopt a risk-based, zero-trust ACR architecture that makes private networking, identity-based authentication, repository-scoped ABAC authorization, deployment-time signature verification, immutable digest references, and independent recovery the default.
+
+**Network exposure**: deny by default! \
+Every ACR instance MUST have `publicNetworkAccess` set to Disabled and MUST be reachable only through an Azure Private Link private endpoint in an approved VNet. \
+Private endpoints automatically enable dedicated data endpoints (`myregistry.<region>.data.azurecr.io`); all pull and push paths MUST use the private endpoint, and public *.azurecr.io and *.blob.core.windows.net data paths MUST NOT be reachable from the internet.
+
+**Authentication**: no long-lived credentials! \
+Every ACR authentication path MUST use Microsoft Entra ID. Azure-hosted workloads MUST use managed identities; GitHub Actions and Azure DevOps MUST use workload identity federation (OIDC). Service principals with client secrets are prohibited for new integrations. \
+The ACR admin account MUST be disabled (adminUserEnabled=false / az acr update --admin-enabled false).
+
+**Authorization**: repository ABAC, exact roles! \
+Registries MUST be created or migrated with roleAssignmentMode=AbacRepositoryPermissions. The following roles are the ONLY data-plane roles permitted, and they MUST be assigned at the narrowest repository scope possible using ABAC conditions:
+* Container Registry Repository Reader for runtime pull consumers;
+* Container Registry Repository Writer for CI/CD publishers;
+* Container Registry Repository Contributor only for break-glass or repository administration, never for normal workloads. \
+Legacy AcrPull, AcrPush, and AcrDelete roles MUST NOT be assigned to new identities; any existing assignment MUST be migrated before the ABAC cutover, not after.
+
+**Data path**: who may call what! \
+Pull consumers (AKS kubelets, Container Apps, deployment controllers) MUST have Container Registry Repository Reader scoped to the specific repository or repository prefix they consume, and MUST NOT have write or delete. \
+Publishers (CI/CD identities) MUST have Container Registry Repository Writer scoped to the repositories they own, and MUST NOT have delete or registry control-plane rights. \
+Deletion MUST be performed only by a separate, non-pipeline identity holding Container Registry Repository Contributor on the target repository, with approval. \
+
+**Transport security**. All communication with registry MUST use TLS 1.2 or higher; plaintext HTTP registry access MUST be blocked by client configuration and network policy. \
+Connections to Key Vault and signing services MUST use TLS and managed identity or federated credentials; no signing or key-access secret MAY traverse an unencrypted channel.
+
+**Encryption at rest**. Microsoft-managed encryption at rest is the default and MUST remain enabled! \
+The architecture SHOULD preserve the ability to adopt customer-managed keys (CMK) for relevant cases where it is required.
+
+**Monitoring and audit**. Every registry MUST route ContainerRegistryLoginEvents and ContainerRegistryRepositoryEvents logs, plus Azure Activity Logs for control-plane changes, to a centralized Log Analytics workspace (Azure monitor's log analystics). \
+The following events MUST generate a security alert with a named owner: 
+* authentication failures from unexpected identities or networks
+* push/delete activity from identities not in the approved publisher/deleter set
+* public-network access attempts when publicNetworkAccess=Disabled
+* changes to publicNetworkAccess, roleAssignmentMode, network rules, or diagnostic settings
+* signature-verification denials at admission; and certificate or key expiration within 30 days.
+
+Log retention MUST meet the organization’s incident-response requirement and MUST NOT rely on ACR’s default retention alone.
+
+
+Highest-risk boundary — the publisher identity + signing key path. The single component that concentrates risk is the CI/CD publisher identity together with the signing certificate/key it uses. If that identity or key is compromised, an attacker can publish a signed, apparently trustworthy artifact that passes admission control. This boundary is enforced by: (a) OIDC federation so the publisher identity is not a stored secret; (b) Notation signing with the private key held in Azure Key Vault or Trusted Signing, never exported to the pipeline; (c) separation of the signing role from the push role so a compromised push credential cannot also produce a valid signature; and (d) Ratify + Azure Policy at the AKS admission boundary with Deny effect for unsigned or untrusted-signer images. It is audited by logging every signing event and every admission denial, and by retaining the signature and certificate chain alongside the image digest. It is tested by a negative test that attempts to deploy an unsigned image and an image signed by a non-trusted certificate; both MUST be denied.
+
+**Artifact identification and immutability**. Production deployments MUST reference images by digest (<repository>@sha256:<digest>), not by mutable tag. \
+Production repositories MUST be locked against deletion and tag mutation as well as policy freezes, except through the approved deleter identity. \
+Tags MAY be used for human readability but MUST NOT be the deployment reference. \
+Content delete lock with `CanNotDelete` to prevent accidental delete
+ACR soft delete policy MUST be turned on for where unintended accidental delete occurs.
+
+
+**Vulnerability and provenance gating**. Microsoft Defender for Cloud container image assessment MUST be enabled on every registry. Build pipelines MUST produce an SBOM and provenance attestation bound to the image digest. Production promotion MUST be blocked when an image violates the organization’s critical-vulnerability threshold, unless a time-bound exception with a named owner is recorded. (Driver 3)
+
+**Recovery**. redundant Container registries MUST be set up to act as a vault where an automated pipeline could backup Critical production images, their signatures, SBOMs, and provenance to an air-gapped registry  outside the main one's blast radius, along side restore tests that MUST be performed frequently for integrity and availability verification. \
+Geo-replication MAY be used for regional availability but MUST NOT be treated as backup. \
+
+
+
