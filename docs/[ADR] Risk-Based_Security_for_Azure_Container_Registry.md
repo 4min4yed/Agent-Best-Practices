@@ -131,7 +131,7 @@ Private endpoints automatically enable dedicated data endpoints (`myregistry.<re
 
 **Authentication**: no long-lived credentials! \
 Every ACR authentication path MUST use Microsoft Entra ID. Azure-hosted workloads MUST use managed identities; GitHub Actions and Azure DevOps MUST use workload identity federation (OIDC). Service principals with client secrets are prohibited for new integrations. \
-The ACR admin account MUST be disabled (adminUserEnabled=false / az acr update --admin-enabled false).
+The ACR admin account MUST be disabled.
 
 **Authorization**: repository ABAC, exact roles! \
 Registries MUST be created or migrated with roleAssignmentMode=AbacRepositoryPermissions. The following roles are the ONLY data-plane roles permitted, and they MUST be assigned at the narrowest repository scope possible using ABAC conditions:
@@ -162,8 +162,6 @@ The following events MUST generate a security alert with a named owner:
 Log retention MUST meet the organization’s incident-response requirement and MUST NOT rely on ACR’s default retention alone.
 
 
-Highest-risk boundary — the publisher identity + signing key path. The single component that concentrates risk is the CI/CD publisher identity together with the signing certificate/key it uses. If that identity or key is compromised, an attacker can publish a signed, apparently trustworthy artifact that passes admission control. This boundary is enforced by: (a) OIDC federation so the publisher identity is not a stored secret; (b) Notation signing with the private key held in Azure Key Vault or Trusted Signing, never exported to the pipeline; (c) separation of the signing role from the push role so a compromised push credential cannot also produce a valid signature; and (d) Ratify + Azure Policy at the AKS admission boundary with Deny effect for unsigned or untrusted-signer images. It is audited by logging every signing event and every admission denial, and by retaining the signature and certificate chain alongside the image digest. It is tested by a negative test that attempts to deploy an unsigned image and an image signed by a non-trusted certificate; both MUST be denied.
-
 **Artifact identification and immutability**. Production deployments MUST reference images by digest (<repository>@sha256:<digest>), not by mutable tag. \
 Production repositories MUST be locked against deletion and tag mutation as well as policy freezes, except through the approved deleter identity. \
 Tags MAY be used for human readability but MUST NOT be the deployment reference. \
@@ -176,5 +174,25 @@ ACR soft delete policy MUST be turned on for where unintended accidental delete 
 **Recovery**. redundant Container registries MUST be set up to act as a vault where an automated pipeline could backup Critical production images, their signatures, SBOMs, and provenance to an air-gapped registry  outside the main one's blast radius, along side restore tests that MUST be performed frequently for integrity and availability verification. \
 Geo-replication MAY be used for regional availability but MUST NOT be treated as backup. \
 
+## Consequences
+
+### Gains
+Addressed most of the security risks and satisified Drivers:
+* no secret-based ACR path remains for new integrations, reducing credential-leak blast radius.
+* a public endpoint scan from outside the approved VNet returns no reachable registry endpoint.
+* a compromised registry push alone is insufficient to deploy a malicious image, because admission control rejects unsigned or untrusted-signer artifacts.
+* a compromised pull identity cannot push, and a compromised push identity cannot delete production repositories.
+* every mutation is tied to an Entra principal and a source network, and alerts are based on events that are out of pattern.
+* a deleted or ransomware-affected registry does not eliminate the last trusted copy of production artifacts.
+
+### trade-offs
+
+* More configuration complexity: private DNS, VNet peering, access per identity...
+* ABAC migration breaks existing identities:  AcrPush / AcrPull assignments stop working once roleAssignmentMode=AbacRepositoryPermissions, and so will the dependant Pipelines.
+* Signing and admission policy add build-time and dependencies: certificate lifecycle, Ratify installation, and policy maintenance...
+* Independent recovery exports add storage cost and a recurring restore-test obligation.
 
 
+### Validation 
+
+*
