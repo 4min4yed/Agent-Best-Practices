@@ -31,7 +31,7 @@ Note; the risks related to Microsoft’s part of the shared responsibility model
 
 ### Network exposure
 
-1. Private Link + dedicated data endpoints + public access disabled:  \ 
+1. Private Link + dedicated data endpoints + public access disabled: \
 Private link allows for direct private tunnels between ACR and internal Azure private VNets and services and between ACR and private on-prem networks. \
 Dedicated data endpoints allow scoped firewall rules on `*.data.azurecr.io`. \
 Eliminiates the public data-plane attack surface.
