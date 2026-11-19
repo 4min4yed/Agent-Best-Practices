@@ -2,15 +2,17 @@
 
 ## Context, Problem statement and methodology
 
-To be efficient and deployed at scale, agents as well as their related workloads rely heavily on containerization and OCI artifacts; specifically container images, stored and managed on the Azure Container Registry (ACR) thanks to its range of features. And assuming ACR is secure by default is the first issue.
+### Context
+To be efficient and deployed at scale, agents as well as their related workloads rely heavily on containerization and OCI artifacts; specifically container images, stored and managed on the Azure Container Registry (ACR) thanks to its range of features. \
+And assuming ACR is secure by default is the first issue.
 
-As the shared responsibility model of Microsoft leaves quite a substantial attack surface unaddressed, and compromising the ACR has impacts on the entire chain of operations
+As the shared responsibility model of Microsoft leaves quite a substantial attack surface unaddressed, and compromising the ACR has impacts on the entire chain of operations, protecting it means keeping these artifacts safe throughout the different phases of their lifecycle, which becomes a crucial part of securing our agents.
 
-So protecting it means keeping these artifacts safe throughout the different phases of their lifecycle, which becomes a crucial part of securing our agents.
+### Problem statement
+So, How can we secure ACR to protect its entrusted artifacts throughout their lifecycle, without loosing the flexibility its features offer?
 
-How can we secure ACR to protect its entrusted artifacts throughout their lifecycle, without loosing on the flexibility its features offer?
-
-The adopted **methodology** of producing this architecture is based on a **risk management** methodology:
+### Methodology
+The adopted **methodology** of producing this architecture is a **risk** based methodology:
 
 * identifying the operational procedures (what ACR does?) and assets involved in those procedures (ACR does it with what/to what?) as well as classifying them based on their security properties,
 * then the authentication, authorization and availability risks related to those aspects (what could go wrong ?)
@@ -20,10 +22,12 @@ The adopted **methodology** of producing this architecture is based on a **risk 
 Note; the risks related to Microsoft’s part of the shared responsibility model were omitted.
 
 ## Decision Drivers
-* We need to follow zero trust architecture with granular, least privelege access control. \
+* We need a zero trust architecture with granular, least privelege access control. \
 * No ACR operation may depend on a secret, password, or the admin account, every authentication must be identity-based and short-lived. \
 * Artifact protection needs to be applied throughout all phases of its lifecycle. \
-* Recovery from destructive events is independent of geo-replication.
+* Recovery from destructive events should be available.
+* Balance between cost and complexity
+
 
 
 
@@ -49,13 +53,13 @@ Reconsider if a service cannot be placed in a VNet.
 3. Trusted-services-only exception \
 Public endpoint enabled but limited to Azure trusted services.
 
-**Deferred** because it is an exception path, not a primary control. Reconsider if a required Azure service cannot reach the private endpoint and no managed-identity workaround exists. |
+**Deferred** because it is a side feature. Reconsider if an Azure service is required to reach private endpoint.
 
 ### Authentication
 
 1. Microsoft Entra ID with managed identities / workload identity federation (OIDC) \
-Azure-hosted workloads use managed identity; GitHub Actions and Azure DevOps use federated credentials. \ 
-No stored secrets; short-lived tokens; auditable principal identity; satisfies Driver 1 and 2.
+Azure-hosted workloads use managed identity while GitHub Actions and Azure DevOps use federated credentials. \
+No stored secrets and short-lived tokens.
 
 **Chosen** because it eliminates long-lived credentials on both Azure-native and external CI/CD paths, reducing the great risk that comes with them, and allows for more control.
 
@@ -74,48 +78,48 @@ Immediate bootstrap access.
 
 ### Authorization
 
-1. ABAC repository permissions with Container Registry Repository Reader / Writer / Contributor \
-Role assignments scoped to specific repositories via ABAC conditions. \
+1. ABAC repository permissions with Container Registry Repository [Reader / Writer / Contributor] \
+Role assignments over specific repositories. \
 Least-privilege at repository granularity; separates pull, push, and delete...
 
 **Chosen** because it has the most granular access control and satisfies Driver 1
 
 2. Legacy RBAC at registry scope \
-Registry-wide data-plane roles. Simpler role model; familiar to existing pipelines.
+Roles over the entire registry and simpler role model.
 
 **Rejected** because, for example, any 'push' role holder can push to every repository, reducing granularity thus violating Driver 1.
 
 
 
 ### Artifact integrity
-1. Notation signing + Ratify/Azure Policy admission verification \
-Images signed at build with Notation; signatures verified at deployment via Ratify and Azure Policy deny effect. \
+1. Artifact signing and verification \
+Images signed at build and signatures verified at deployment. \
 supports Key Vault or Trusted Signing certificate management;
 
 **Chosen** because signing alone does not prevent an unsigned image from being deployed; verification at admission is the only falsifiable enforcement of Driver 3.
 
 2. Docker Content Trust (DCT) \
-Legacy Notary v1 signing. \
+Legacy signing. \
 Existing tooling in some pipelines.
 
 **Rejected** because DCT cannot be enabled on new registries after May 31, 2026, and will be removed March 31, 2028; it is not a viable forward-looking architecture.
 
 3. Tag-based immutability only \
-Reliance on tags plus repository locks. \
+tags are by default mutable (we can assign the same tag to a different artifact after being assigned to an other) and Reliance on tags plus repository locks aren't enough. \
 Low tooling overhead.
 
 **Rejected** because tags are mutable references and do not prove authenticity; it cannot satisfy Driver 3 without signature verification.
 
 ### Encryption at rest
 
-1. Microsoft-managed keys (default) \
-Platform-managed encryption at rest. \
-No key-lifecycle burden; available on all SKUs.
+1. Microsoft-managed keys \
+thtis is the by-default platform-managed encryption at rest. \
+No key-lifecycle burden.
 
 **Chosen** as the default because it reduces operational dependencies and is sufficient unless a regulatory or contractual key-control requirement exists; it does not weaken Drivers.
 
-2. Customer-managed keys (CMK) \
-Key Vault key encrypts registry content; Premium SKU only; must be configured at registry creation. \
+2. Customer-managed keys \
+Key Vault key encrypts registry content. \
 Greater key-control; supports HSM-backed keys.
 
 **Deferred** because CMK adds key-availability, rotation, and recovery dependencies and is only configurable at creation on Premium SKU. \
@@ -134,7 +138,7 @@ Every ACR authentication path MUST use Microsoft Entra ID. Azure-hosted workload
 The ACR admin account MUST be disabled.
 
 **Authorization**: repository ABAC, exact roles! \
-Registries MUST be created or migrated with roleAssignmentMode=AbacRepositoryPermissions. The following roles are the ONLY data-plane roles permitted, and they MUST be assigned at the narrowest repository scope possible using ABAC conditions:
+Registries MUST be created or migrated with roleAssignmentMode=AbacRepositoryPermissions. The following roles are the ONLY data-plane roles permitted, and they MUST be assigned at the narrowest repository scope possible using ABAC conditions: 
 * Container Registry Repository Reader for runtime pull consumers;
 * Container Registry Repository Writer for CI/CD publishers;
 * Container Registry Repository Contributor only for break-glass or repository administration, never for normal workloads. \
@@ -142,7 +146,7 @@ Legacy AcrPull, AcrPush, and AcrDelete roles MUST NOT be assigned to new identit
 
 **Data path**: who may call what! \
 Pull consumers (AKS kubelets, Container Apps, deployment controllers) MUST have Container Registry Repository Reader scoped to the specific repository or repository prefix they consume, and MUST NOT have write or delete. \
-Publishers (CI/CD identities) MUST have Container Registry Repository Writer scoped to the repositories they own, and MUST NOT have delete or registry control-plane rights. \
+Publishers (like CI/CD identities...) MUST have Container Registry Repository Writer scoped to the repositories they own, and MUST NOT have delete or registry control-plane rights. \
 Deletion MUST be performed only by a separate, non-pipeline identity holding Container Registry Repository Contributor on the target repository, with approval. \
 
 **Transport security**. All communication with registry MUST use TLS 1.2 or higher; plaintext HTTP registry access MUST be blocked by client configuration and network policy. \
