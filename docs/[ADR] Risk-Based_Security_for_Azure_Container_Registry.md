@@ -64,13 +64,18 @@ registry reachable only through a private endpoint in an approved VNet; eliminat
 
 ### Artifact Integrity
 
-1. **Artifact signing + verification at admission** : images signed at build, signatures verified at deploy. \
+1. **Artifact signing + verification at admission**: images are signed at build with Notation, and signatures are verified at deploy by an admission controller (Ratify on AKS). \
+Notation is Microsoft's supported signing tool for ACR and integrates with Azure Key Vault for key custody. \
+Ratify runs as a cluster add-on and rejects images whose signature is missing, expired, or from an untrusted signer. \
+Signing alone proves who signed; admission verification is what actually blocks an unsigned image from deploying. \
+Short-lived signing certificates are used with timestamping so signatures remain verifiable even after the certificate expires.
+
 **Chosen** : signing alone does not stop an unsigned image from deploying; admission verification is the only enforceable control for driver 3.
 
 2. **Docker Content Trust (DCT)** : cannot be enabled on new registries after 31 May 2026 and is removed 31 March 2028. \
 **Rejected** : not a future proof solution.
 
-4. **Tag immutability only** : tags are mutable references and prove nothing about authenticity. \
+3. **Tag immutability only** : tags are mutable references and prove nothing about authenticity. \
 **Rejected** : cannot satisfy driver 3 without signature verification.
 
 ### Encryption at Rest
@@ -78,7 +83,7 @@ registry reachable only through a private endpoint in an approved VNet; eliminat
 1. **Microsoft-managed keys** : platform-managed default, no key-lifecycle burden. \
 **Chosen** : sufficient absent a regulatory/contractual key-control requirement; defers complexity without weakening the drivers.
 
-3. **Customer-managed keys** : Key Vault / HSM-backed keys; adds availability, rotation, and recovery dependencies and is creation-time-only on Premium SKU. \
+2. **Customer-managed keys** : Key Vault / HSM-backed keys; adds availability, rotation, and recovery dependencies and is creation-time-only on Premium SKU. \
 **Deferred** : reconsider if a regulation, customer, or organizational policy requires it.
 
 ## Decision
@@ -95,15 +100,16 @@ Public `*.azurecr.io` and `*.blob.core.windows.net` data paths are not reachable
   - `Container Registry Repository Writer` : publishers.
   - `Container Registry Repository Contributor` : break-glass and repository administration only, never normal workloads.
   - Legacy `AcrPull` / `AcrPush` / `AcrDelete` are not assigned to new identities; existing assignments are migrated before the ABAC cutover, not after.
-
+  - *Break-glass with PIM*. The Container Registry Repository Contributor role is never assigned as permanent active role. It is assigned as eligible through Microsoft Entra Privileged Identity Management (PIM), with a maximum activation window, mandatory justification... with activation requiring MFA . and every activation and use is logged to the same Log Analytics workspace as registry diagnostics, with alerts on any activation outside a declared incident.
 - **Artifacts Management.** Pull consumers get `Reader` on only the repository or prefix they consume, with no write/delete. \
 Publishers get `Writer` on only the repositories they own, with no delete and no control-plane rights. \
 Deletion is performed only by a separate, non-pipeline identity holding `Contributor` on the target repository, with approval.
 - **Transport.** TLS 1.2+ for all registry communication; plaintext HTTP is blocked by client configuration and network policy. Key Vault and signing-service connections use TLS with managed identity or federated credentials; no signing or key-access secret traverses an unencrypted channel.
 - **Encryption at rest.** Microsoft-managed keys remain enabled as the default. The architecture preserves the ability to adopt CMK without redesign if a regulatory or contractual requirement appears.
 - **Artifact identification.** Production deployments reference images by digest (`<repository>@sha256:<digest>`), never by mutable tag. \
-Production repositories are locked against deletion and tag mutation except through the approved deleter identity, because tags are mutable and should be for human readability only. \
-`CanNotDelete` locks and ACR soft-delete are enabled.
+Production repositories are locked against:
+- tag mutation using ACR repository attributes. \
+- Deletion by only allowing Container Registry Repository Contributor role at the target repository, held only by the approved deleter identity, and is  protected by CanNotDelete resource locks and ACR soft-delete.
 - **Supply chain.** Microsoft Defender for Cloud image assessment is enabled on every registry. \
 Production promotion is blocked when an image violates the organization's vulnerability threshold.
 - **Monitoring.** Every registry authentication and artifact data and control plane logs to a Log Analytics workspace. \
@@ -112,6 +118,8 @@ Retention meets the incident response requirements and does not rely on ACR defa
 - **Recovery.** A redundant registry acts as a vault outside the primary's blast radius: an automated pipeline backs up critical production images, signatures... to another registry. \
 Restore tests run on a defined schedule to verify integrity and availability. \
 Geo-replication is for regional availability only and is never treated as backup.
+
+
 
 ## Consequences
 
@@ -134,10 +142,9 @@ Geo-replication is for regional availability only and is never treated as backup
 ### Revisit Triggers
 
 We would revisit this decision if:
-- A required service cannot be placed in a VNet (fall back to Option 2 for that path);
+- A required service cannot be placed in a VNet
 - ABAC repository roles prove unavailable or unstable in a required region;
-- A regulation or customer contract requires CMK (adopt the deferred Option 2 for encryption); or
-- A signing/admission dependency becomes unsupportable.
+- A regulation or customer contract requires CMK
 
 ## How We Will Check It
 
