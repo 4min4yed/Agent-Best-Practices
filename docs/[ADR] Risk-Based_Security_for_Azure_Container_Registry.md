@@ -118,6 +118,7 @@ Retention meets the incident response requirements and does not rely on ACR defa
 - **Recovery.** A redundant registry acts as a vault outside the primary's blast radius: an automated pipeline backs up critical production images, signatures... to another registry. \
 Restore tests run on a defined schedule to verify integrity and availability. \
 Geo-replication is for regional availability only and is never treated as backup.
+The vault registry has its own separate Contributor identity.
 
 
 
@@ -138,6 +139,7 @@ Geo-replication is for regional availability only and is never treated as backup
 - The ABAC migration breaks existing `AcrPull`/`AcrPush` assignments and dependent pipelines : hence the migrate-before-cutover requirement.
 - Signing and admission add build-time dependencies: certificate lifecycle, admission-controller installation, policy maintenance.
 - Backups adds storage cost and a recurring test overhead.
+- The contributor supposedly responsible for deletion only, has write access as well, which contradicts with the least privilege AC, but ACR has no delete only policy/role.
 
 ### Revisit Triggers
 
@@ -153,3 +155,4 @@ We would revisit this decision if:
 - successful tests: access with the admin account fails; a pull from outside the approved VNet fails; a pull identity attempting a push gets an authorization error; an unsigned image is rejected at admission; a tag-mutation or delete attempt outside the approved deleter identity is denied.
 - Recovery test: the scheduled restore from the air-gapped vault succeeds and the restored digest matches the production digest.
 - Alert test: a simulated unusual push/access... attempt generate alerts to the named owner.
+- Contributor test: a permanent Contributor assignment attempt is denied by policy; a PIM activation without justification or MFA fails; an activation outside a declared incident fires an alert to the named owner.
