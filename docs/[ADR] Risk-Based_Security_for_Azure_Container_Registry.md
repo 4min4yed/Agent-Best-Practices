@@ -40,7 +40,7 @@ registry reachable only through a private endpoint in an approved VNet; eliminat
 2. **Public access with IP allowlist** : simpler, but leaves the registry publicly resolvable. \
 **Rejected** : expands attack surface; violates driver 1. Reconsider only if a service genuinely cannot be placed in a VNet.
 
-4. **Trusted-services-only exception** : public endpoint limited to Azure trusted services. \
+3. **Trusted-services-only exception** : public endpoint limited to Azure trusted services. \
 **Deferred** : side feature; reconsider only if an Azure service must reach a private endpoint.
 
 ### Authentication
@@ -51,7 +51,7 @@ registry reachable only through a private endpoint in an approved VNet; eliminat
 2. **Service principal with client secret** : universally supported but secrets are long-lived and leak into logs and code. \
 **Rejected** : violates driver Reconsider only for a legacy integration that cannot federate, with fixed rotation and a named owner.
 
-4. **ACR admin account** : shared registry-wide credential with no accountability. \
+3. **ACR admin account** : shared registry-wide credential with no accountability. \
 **Rejected** : violates driver 2; disabled by default in this decision.
 
 ### Authorization
