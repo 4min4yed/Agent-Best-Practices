@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Scope:** Customer side of the shared responsibility model (Microsoft platform responsibilities are out of scope)
+- **Architecture:** ![Architecture](https://raw.githubusercontent.com/4min4yed/Cloud-Computing/fc591153d0187e625ecd6bd286037032b5ab60d0/Microsoft%20Azure/Images/ADR_ACR_ARCH.jpg)
 
 ## Context
 
